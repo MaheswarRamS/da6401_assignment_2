@@ -11,12 +11,13 @@ class CustomDropout(nn.Module):
 
     def __init__(self, p: float = 0.5):
         """
-        Initialize the CustomDropout layer.
+        Initializing the CustomDropout layer.
 
         Args:
-            p: Dropout probability.
+            p - Dropout probability.
         """
-        pass
+        super().__init__()
+        self.p = p
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -25,8 +26,17 @@ class CustomDropout(nn.Module):
         Args:
             x: Input tensor for shape [B, C, H, W].
 
-        Returns:
-            Output tensor.
+
         """
-        # TODO: implement dropout.
-        raise NotImplementedError("Implement CustomDropout.forward")
+        if not self.training or self.p==0:
+            return x
+        if self.p == 1.0:
+            return torch.zeros_like(x)
+        
+            # Creating a binary mask: 1=Keep, 0=Drop
+        mask = (torch.rand_like(x)>self.p).float()
+            # Applying Inverted Dropout
+        return x * mask / (1-self.p + 1e-7)
+        
+    
+    
