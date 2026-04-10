@@ -192,9 +192,9 @@ def train_localizer(args, train_loader, val_loader, device):
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience = 3)
 
     best_val_loss = float('inf')
-
+    mse_w = 0.001
     for epoch in range(1 , args.epochs +1):
-        model.train()
+        model.train() 
         t_loss, t_mse, t_iou, n = 0.0,0.0,0.0,0.0
         t_miou, t_acc, t_mae = 0.0,0.0,0.0 
         for batch_idx, batch in enumerate (train_loader,1):
@@ -204,7 +204,7 @@ def train_localizer(args, train_loader, val_loader, device):
             preds = model(imgs)
             l_mse = criterion(preds, boxes)
             l_iou = iou_fn(preds, boxes)
-            loss = l_mse + l_iou
+            loss = (l_mse * mse_w) + l_iou
             loss.backward()
             optimizer.step()
             tm = loc_metrics(preds.detach(), boxes)
@@ -236,17 +236,17 @@ def train_localizer(args, train_loader, val_loader, device):
                 preds = model(imgs)
                 l_mse = criterion(preds, boxes)
                 l_iou = iou_fn(preds, boxes)
-                loss = l_mse + l_iou
+                loss = (l_mse*mse_w) + l_iou
                 vm = loc_metrics(preds, boxes)
                 v_loss += loss.item() 
                 v_mse += l_mse.item()  
                 v_iou += l_iou.item() 
-                v_miou += tm['mean_iou']
-                v_acc += tm['accuracy']
-                v_mae += tm['mae'] 
+                v_miou += vm['mean_iou']
+                v_acc += vm['accuracy']
+                v_mae += vm['mae'] 
                 nv += 1
         
-        v_loss /= n; v_mse /= n; v_iou /= n;
+        v_loss /= nv; v_mse /= nv; v_iou /= nv;
         v_miou /= nv; v_acc /= nv; v_mae /= nv       
         scheduler.step(v_loss)
 
@@ -344,16 +344,16 @@ def train_segmentation(args, train_loader, val_loader, device):
         scheduler.step(v_loss)
 
         print(f' Epoch {epoch:3d}/{args.epochs} |'
-              f" Train_loss={t_loss:.4f} t_px_ac={tm['px_acc']:.1f}% t_miou={tm['miou']:.1f}% |"
-              f" Val_loss={v_loss:.4f}  v_px_ac={vm['px_acc']:.1f}% v_miou={vm['miou']:.1f}% |")
+              f" Train_loss={t_loss:.4f} t_px_ac={t_px_acc:.1f}% t_miou={t_miou:.1f}% |"
+              f" Val_loss={v_loss:.4f}  v_px_ac={v_px_acc:.1f}% v_miou={v_miou:.1f}% |")
         
         wandb.log({
             'seg/train_loss': t_loss,
-            'seg/t_pc_acc': tm['px_acc'],
-            'seg/t_miou': tm['miou'],
+            'seg/t_pc_acc': t_px_acc  ,
+            'seg/t_miou': t_miou,
             'seg/val_loss': v_loss,
-            'seg/v_pc_acc': vm['px_acc'],
-            'seg/v_miou': vm['miou'],
+            'seg/v_pc_acc': v_px_acc,
+            'seg/v_miou': v_miou,
             'seg/lr': optimizer.param_groups[0]['lr'],
             'epoch': epoch,
         })
