@@ -1,146 +1,157 @@
-# DA6401 Assignment-2 Skeleton Guide
+# DA6401 Assignment 2 — Visual Perception Pipeline on Oxford-IIIT Pet
 
-This repository is an instructional skeleton for building the complete visual perception pipeline on Oxford-IIIT Pet.
+## Overview
 
+This repository implements a complete multi-task visual perception pipeline on the Oxford-IIIT Pet dataset, covering three tasks:
 
-### ADDITIONAL INSTRUCTIONS FOR ASSIGNMENT2:
-- Ensure VGG11 is implemented according to the official paper(https://arxiv.org/abs/1409.1556). The only difference being injecting BatchNorm and CustomDropout layers is your design choice.
-- Train all the networks on normalized images as input (as the test set given by autograder will be normalized images).
-- The output of Localization model = [x_center, y_center, width, height] all these numbers are with respect to image coordinates, in pixel space (not normalized)
-- Train the object localization network with the following loss function: MSE + custom_IOU_loss.
-- Make sure the custom_IOU loss is in range: [0,1]
-- In the custom IOU loss, you have to implement all the two reduction types: ["mean", "sum"] and the default reduction type should be "mean". You may include any other reduction type as well, which will help your network learn better.
-- multitask.py shd load the saved checkpoints (classifier.pth, localizer.pth, unet.pth), initialize the shared backbone and heads with these trained weights and do prediction.
-- Keep paths as relative paths for loading in multitask.py
-- Assume input image size is fixed according to vgg11 paper(can be hardcoded need not pass as args)
-- Stick to the arguments of the functions and classes given in the github repo, if you include any additional arguments make sure they always have some default value.
-- Do not import any other python packages apart from the ones mentioned in assignment pdf, if you do so the autograder will instantly crash and your submission will not be evaluated.
-- The following classes will be used by autograder: 
-    ```
-        from models.vgg11 import VGG11
-        from models.layers import CustomDropout
-        from losses.iou_loss import IoULoss
-        from multitask import MultiTaskPerceptionModel
-    ```
-- The submission link for this assignment will be available by Saturday(04/04/2026) on gradescope
+- **Task 1 — Classification:** Predict the breed of a pet (37 classes) using a VGG11-based classifier
+- **Task 2 — Localization:** Predict a bounding box `(x_center, y_center, width, height)` in pixel space using a VGG11-based regressor
+- **Task 3 — Segmentation:** Predict a trimap mask (foreground / background / boundary) using a VGG11 U-Net
 
-
-
-
-
-### GENERAL INSTRUCTIONS:
-- From this assignment onwards, if we find any wandb report which is private/inaccessible while grading, there wont be any second chance, that submission will be marked 0 for wandb marks.
-- The entireity of plots presented in the wandb report should be interactive and logged in the wandb project. Any screenshot or images of plots will straightly be marked 0 for that question.
-- Gradescope offers an option to activate whichever submission you want to, and that submission will be used for evaluation. Under any circumstances, no requests to be raised to TAs to activate any of your prior submissions. It is the student's responsibility to do so(if required) before submission deadline.
-- Assignment2 discussion forum has been opened on moodle for any doubt clarification/discussion.   
-
-
-
-# Assignment 2 – Submission Guidelines
-
-Follow the steps below carefully:
+All three models share the same VGG11 encoder backbone and are unified in `MultiTaskPerceptionModel`.
 
 ---
 
-## Step 1 – Google Drive Setup
-
-Create a new folder in your Google Drive and upload all 3 model checkpoints to it:
-
-- `classifier.pth`
-- `localizer.pth`
-- `unet.pth`
-
----
-
-## Step 2 – Get Drive IDs
-
-For each `.pth` file:
-
-1. Click the three dots (**More actions**) next to the file
-2. Click **Share → Share**
-3. Set access to **Anyone with the link**
-4. Copy the link and extract the ID
-
-**Example:**
-Link → https://drive.google.com/file/d/1t2EgeJ3TaYFSBQoC9o0ojd8Nn52XzV0i/view?usp=sharing
-ID   → 1t2EgeJ3TaYFSBQoC9o0ojd8Nn52XzV0i
-
----
-
-## Step 3 – Update Your Code
-
-Paste these 4 lines at the **start** of the `init()` function inside `MultiTaskPerceptionModel`:
-```python
-import gdown
-gdown.download(id="<classifier.pth drive id>", output=classifier_path, quiet=False)
-gdown.download(id="<localizer.pth drive id>", output=localizer_path, quiet=False)
-gdown.download(id="<unet.pth drive id>", output=unet_path, quiet=False)
-```
-
-Replace each `<...drive id>` with the actual IDs from Step 2.
-
----
-
-## Step 4 – Clean Up Locally
-
-Delete all 3 `.pth` files from your local `/checkpoints` folder.
-
----
-
-## Step 5 – Push to GitHub
-
-Push the current project to GitHub. Make sure **no `.pth` files** are included.
-
----
-
-## Step 6 – Verify Project Structure
-
-Your final project should look like this:
+## Project Structure
 
 ```
 .
-├── checkpoints
+├── checkpoints/
 │   └── checkpoints.md
-├── data
-│   └── pets_dataset.py
-├── inference.py
-├── losses
+├── data/
+│   └── pets_dataset.py          # Oxford-IIIT Pet dataset loader
+├── losses/
 │   ├── __init__.py
-│   └── iou_loss.py
-├── models
-│   ├── classification.py
+│   └── iou_loss.py              # Custom IoU loss (mean / sum reduction)
+├── models/
 │   ├── __init__.py
-│   ├── layers.py
-│   ├── localization.py
-│   ├── multitask.py
-│   ├── segmentation.py
-│   └── vgg11.py
-├── README.md
+│   ├── layers.py                # CustomDropout
+│   ├── vgg11.py                 # VGG11 encoder (with BatchNorm)
+│   ├── classification.py        # VGG11Classifier
+│   ├── localization.py          # VGG11Localizer
+│   ├── segmentation.py          # VGG11UNet (U-Net decoder)
+│   └── multitask.py             # MultiTaskPerceptionModel
+├── train.py                     # Training script for all three tasks
+├── analysis.py                  # W&B experiment scripts (sections 2.1–2.8)
+├── inference.py                 # Inference and evaluation on test set
 ├── requirements.txt
-└── train.py
+└── README.md
 ```
----
-
-## Step 7 – README
-
-Make sure your README includes:
-
-- Public **WandB report** link
-- **GitHub repo** link
 
 ---
 
-## Step 8 – Submit
+## Setup
 
-Zip the project and submit on **Gradescope**.
+### 1. Install dependencies
 
-> ⚠️ **Do NOT delete** the above created Drive folder till Assignment 2 marks are released.
+```bash
+pip install -r requirements.txt
+```
 
+### 2. Download the Oxford-IIIT Pet dataset
 
-# Contact
-
-For questions or issues, please contact the teaching staff or post on the course forum.
+```
+data/pets/
+    images/          ← .jpg images
+    annotations/
+        trainval.txt
+        test.txt
+        trimaps/     ← .png trimap masks
+        xmls/        ← Pascal VOC bounding box annotations
+```
 
 ---
 
-Good luck with your implementation!
+## Training
+
+```bash
+# Classification only
+python train.py -t classification -d ./data/pets -ep 50 -bs 16 -lr 0.0001
+
+# Localization only
+python train.py -t localization -d ./data/pets -ep 50 -bs 16 -lr 0.0001
+
+# Segmentation only
+python train.py -t segmentation -d ./data/pets -ep 50 -bs 16 -lr 0.0001
+
+# All three tasks sequentially
+python train.py -t all -d ./data/pets -ep 50 -bs 16 -lr 0.0001
+```
+
+### Training Arguments
+
+| Argument | Short | Default | Description |
+|---|---|---|---|
+| `--data_dir` | `-d` | `./data/pets` | Path to dataset root |
+| `--task` | `-t` | `all` | `all` / `classification` / `localization` / `segmentation` |
+| `--epochs` | `-ep` | `50` | Number of training epochs |
+| `--batch_size` | `-bs` | `16` | Batch size |
+| `--lr` | `-lr` | `1e-3` | Learning rate |
+| `--weight_decay` | `-wd` | `1e-4` | L2 regularisation |
+| `--dropout_p` | `-dp` | `0.5` | Dropout probability |
+| `--val_fraction` | `-vf` | `0.1` | Fraction of trainval used for validation |
+| `--num_workers` | `-nm` | `0` | DataLoader worker processes |
+| `--num_breeds` | `-nb` | `37` | Number of classification classes |
+| `--seg_classes` | `-sc` | `3` | Number of segmentation classes |
+| `--cls_ckpt` | `-cck` | `checkpoints/classifier.pth` | Classification checkpoint path |
+| `--loc_ckpt` | `-lck` | `checkpoints/localizer.pth` | Localization checkpoint path |
+| `--seg_ckpt` | `-sck` | `checkpoints/segmentation.pth` | Segmentation checkpoint path |
+| `--wandb_project` | `-wp` | `DA6401_Assignment_2` | W&B project name |
+| `--wandb_entity` | `-we` | `None` | W&B entity name |
+
+Checkpoints are saved to `checkpoints/` and updated only when validation loss improves.
+
+---
+
+## Inference
+
+Runs `MultiTaskPerceptionModel` on the test split and reports all metrics:
+
+```bash
+python inference.py -d ./data/pets
+```
+
+### Inference Arguments
+
+| Argument | Short | Default | Description |
+|---|---|---|---|
+| `--data_dir` | `-d` |`./data/pets` | Path to dataset root |
+| `--batch_size` | `-bs` | `16` | Batch size |
+| `--num_workers` | `-nm` | `0` | DataLoader worker processes |
+| `--num_breeds` | `-nb` | `37` | Number of classification classes |
+| `--seg_classes` | `-sc` | `3` | Number of segmentation classes |
+| `--cls_ckpt` | `-cck` | `checkpoints/classifier.pth` | Classification checkpoint |
+| `--loc_ckpt` | `-lck` | `checkpoints/localizer.pth` | Localization checkpoint |
+| `--seg_ckpt` | `-sck` | `checkpoints/segmentation.pth` | Segmentation checkpoint |
+| `--wandb_project` | `-wp` | `DA6401_Assignment_2` | W&B project name |
+| `--wandb_entity` | `-we` | `None` | W&B entity name |
+
+### Metrics Reported
+
+| Task | Metrics |
+|---|---|
+| Classification | Accuracy, F1 (macro), Precision (macro), Recall (macro) |
+| Localization | Mean IoU |
+| Segmentation | Pixel Accuracy, Mean IoU |
+
+---
+
+## Model Architecture
+
+### VGG11 Encoder (`models/vgg11.py`)
+
+Follows the official VGG11 paper with BatchNorm injected after each convolution:
+
+```
+Block 1: Conv(64)        → BN → ReLU → MaxPool  →  112×112
+Block 2: Conv(128)       → BN → ReLU → MaxPool  →   56×56
+Block 3: Conv(256) × 2  → BN → ReLU → MaxPool  →   28×28
+Block 4: Conv(512) × 2  → BN → ReLU → MaxPool  →   14×14
+Block 5: Conv(512) × 2  → BN → ReLU → MaxPool  →    7×7
+Output : [B, 512, 7, 7] for 224×224 input
+```
+
+## Links
+
+- **W&B Report:** `<paste your public W&B report link here>`
+- **GitHub Repo:** `<paste your GitHub repo link here>`
