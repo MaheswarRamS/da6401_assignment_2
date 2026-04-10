@@ -1,8 +1,150 @@
 """Dataset skeleton for Oxford-IIIT Pet.
 """
+import os
+from typing import Dict, List
 
+import numpy as np
+import torch
 from torch.utils.data import Dataset
+from PIL import Image
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+import xml.etree.ElementTree as ET
+
 
 class OxfordIIITPetDataset(Dataset):
     """Oxford-IIIT Pet multi-task dataset loader skeleton."""
-    pass
+    
+    Class_Names = [ 'Abyssinian', 'Bengal', 'Birman', 'Bombay', 'British_Shorthair',
+        'Egyptian_Mau', 'Maine_Coon', 'Persian', 'Ragdoll', 'Russian_Blue',
+        'Siamese', 'Sphynx', 'american_bulldog', 'american_pit_bull_terrier',
+        'basset_hound', 'beagle', 'boxer', 'chihuahua', 'english_cocker_spaniel',
+        'english_setter', 'german_shorthaired', 'great_pyrenees', 'havanese',
+        'japanese_chin', 'keeshond', 'leonberger', 'miniature_pinscher',
+        'newfoundland', 'pomeranian', 'pug', 'saint_bernard', 'samoyed',
+        'scottish_terrier', 'shiba_inu', 'staffordshire_bull_terrier',
+        'wheaten_terrier', 'yorkshire_terrier'
+    ]
+
+    def __init__(self, root_dir: str = "./data/pets", split: str = 'train', img_size: int=224) -> None:
+        super().__init__()
+        self.root_dir = root_dir
+        self.split = split
+        self.img_size = img_size
+
+        self.images: List[str] = []
+        self.labels: List[int] = []
+
+        list_file = os.path.join(root_dir, 'annotations','trainval.txt' if split =='train' else 'test.txt')
+
+        if os.path.exists(list_file):
+            with open(list_file, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >=2:
+                        self.images.append(parts[0])
+                        self.labels.append(int(parts[1]) - 1)
+
+        if split=='train':
+            self.transform = A.Compose([
+                A.Resize(img_size, img_size),
+                A.HorizontalFlip(p=0.5 if split == 'train' else 0),
+                A.RandomBrightnessContrast(p=0.2),
+                A.Rotate(limit=20, p=0.3),
+                A.GaussNoise(p=0.2),
+                A.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
+                ToTensorV2(transpose_mask=False)
+            ],additional_targets={'mask': 'mask'})
+        else:
+            self.transform = A.Compose([
+                A.Resize(img_size, img_size),
+                A.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
+                ToTensorV2(transpose_mask=False)
+            ],additional_targets={'mask': 'mask'})
+
+
+    def __len__(self) -> int:
+        return len(self.images)
+    
+    
+    @staticmethod
+    def _load_bbox(xml_path:str, orig_w: int, orig_h:int, target_size: int =224) -> torch.Tensor:
+        """ loading the xml files and returning (cx,cy,w,h) scaled to target size """
+        try:  
+            root = ET.parse(xml_path).getroot()
+            bndbox = root.find('.//bndbox')
+            xmin = float(bndbox.find('xmin').text)
+            ymin = float(bndbox.find('ymin').text)
+            xmax = float(bndbox.find('xmax').text)
+            ymax = float(bndbox.find('ymax').text)
+            scale_x = target_size / orig_w
+            scale_y = target_size / orig_h
+            xmin *= scale_x; xmax *= scale_x
+            ymin *= scale_y; ymax *= scale_y
+
+            cx = (xmin +xmax) / 2.0
+            cy = (ymin + ymax) /2.0
+            w =xmax - xmin
+            h = ymax - ymin
+
+            return torch.tensor([cx,cy,w,h], dtype = torch.float32)  
+        except Exception:
+            return None
+    
+    @staticmethod
+    def bbox_from_mask(mask: np.ndarray, target_size: int=224) -> torch.Tensor:
+        """ Derive the bbox from the mask for the test images since it is not available"""
+        pet = (mask==0)
+        if pet.sum() ==0:
+            s = float(target_size)
+            return torch.tensor([s/2,s/2,s,s],dtype = torch.float32)
+        rows =np.where(np.any(pet,axis=1))[0]
+        cols =np.where(np.any(pet,axis=0))[0]
+        ymin, ymax = rows[0], rows[-1]
+        xmin, xmax = cols[0], cols[-1]
+        cx = (xmin + xmax) /2.0
+        cy = (ymin + ymax) /2.0
+        w = float(xmax - xmin)
+        h = float(ymax-ymin)
+        return torch.tensor([cx,cy,w,h], dtype=torch.float32)
+    
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        img_name = self.images[idx]
+        img_path = os.path.join(
+            self.root_dir, 'images', f'{img_name}.jpg'
+        )
+        img = np.array(Image.open(img_path).convert('RGB'))
+        orig_h , orig_w = img.shape[:2]
+
+        mask_path = os.path.join(self.root_dir, 'annotations/trimaps', f'{img_name}.png')
+
+        if os.path.exists(mask_path):
+            mask = np.array(Image.open(mask_path))
+            mask = mask-1
+        else:
+            mask = np.zeros((self.img_size, self.img_size), dtype = np.uint8)
+
+        transformed = self.transform(image=img, mask=mask) 
+        img = transformed['image']
+        mask = transformed['mask']
+
+        if isinstance(mask, np.ndarray):
+            mask = torch.from_numpy(mask).long()
+        else:
+            mask = mask.long()
+            
+        xml_path = os.path.join(self.root_dir, 'annotations', 'xmls', f'{img_name}.xml')
+        bbox = self._load_bbox(xml_path, orig_w=orig_w, orig_h=orig_h, target_size=self.img_size)
+        if bbox is None:
+            bbox =self.bbox_from_mask(mask.numpy(), target_size=self.img_size)
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
+        
+        return {
+            'image': img,
+            'label': label,
+            'bbox': bbox,
+            'mask': mask,
+            'image_name': img_name
+        }
+
