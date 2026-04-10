@@ -6,11 +6,10 @@ from .segmentation import VGG11UNet, DecoderBlock
 from .multitask import MultiTaskPerceptionModel
  
 
-VGG11 = VGG11Encoder
+
  
 __all__ = [
     "CustomDropout",
-    "VGG11",
     "VGG11Encoder",
     "VGG11Classifier",
     "VGG11Localizer",
