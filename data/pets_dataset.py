@@ -54,13 +54,13 @@ class OxfordIIITPetDataset(Dataset):
                 A.GaussNoise(p=0.2),
                 A.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
                 ToTensorV2(transpose_mask=False)
-            ],additional_targets={'mask': 'mask'})
+            ],additional_targets={'mask': 'mask'},bbox_params=A.BboxParams(format='pascal_voc', label_fields =['class_labels']))
         else:
             self.transform = A.Compose([
                 A.Resize(img_size, img_size),
                 A.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
                 ToTensorV2(transpose_mask=False)
-            ],additional_targets={'mask': 'mask'})
+            ],additional_targets={'mask': 'mask'},bbox_params=A.BboxParams(format='pascal_voc', label_fields =['class_labels']))
 
 
     def __len__(self) -> int:
@@ -68,7 +68,7 @@ class OxfordIIITPetDataset(Dataset):
     
     
     @staticmethod
-    def _load_bbox(xml_path:str, orig_w: int, orig_h:int, target_size: int =224) -> torch.Tensor:
+    def _load_bbox(xml_path:str) -> list:
         """ loading the xml files and returning (cx,cy,w,h) scaled to target size """
         try:  
             root = ET.parse(xml_path).getroot()
@@ -77,36 +77,22 @@ class OxfordIIITPetDataset(Dataset):
             ymin = float(bndbox.find('ymin').text)
             xmax = float(bndbox.find('xmax').text)
             ymax = float(bndbox.find('ymax').text)
-            scale_x = target_size / orig_w
-            scale_y = target_size / orig_h
-            xmin *= scale_x; xmax *= scale_x
-            ymin *= scale_y; ymax *= scale_y
-
-            cx = (xmin +xmax) / 2.0
-            cy = (ymin + ymax) /2.0
-            w =xmax - xmin
-            h = ymax - ymin
-
-            return torch.tensor([cx,cy,w,h], dtype = torch.float32)  
+    
+            return torch.tensor([xmin,ymin,xmax,ymax], dtype = torch.float32)  
         except Exception:
             return None
     
     @staticmethod
-    def bbox_from_mask(mask: np.ndarray, target_size: int=224) -> torch.Tensor:
+    def bbox_from_mask(mask: np.ndarray, orig_w: int, orig_h:int) -> list:
         """ Derive the bbox from the mask for the test images since it is not available"""
         pet = (mask==0)
         if pet.sum() ==0:
-            s = float(target_size)
-            return torch.tensor([s/2,s/2,s,s],dtype = torch.float32)
+            return [0.0,0.0, float(orig_w), float(orig_h)]        
         rows =np.where(np.any(pet,axis=1))[0]
         cols =np.where(np.any(pet,axis=0))[0]
         ymin, ymax = rows[0], rows[-1]
         xmin, xmax = cols[0], cols[-1]
-        cx = (xmin + xmax) /2.0
-        cy = (ymin + ymax) /2.0
-        w = float(xmax - xmin)
-        h = float(ymax-ymin)
-        return torch.tensor([cx,cy,w,h], dtype=torch.float32)
+        return [float(xmin),float(ymin),float(xmax),float(ymax)]
     
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
@@ -124,26 +110,34 @@ class OxfordIIITPetDataset(Dataset):
             mask = mask-1
         else:
             mask = np.zeros((self.img_size, self.img_size), dtype = np.uint8)
-
-        transformed = self.transform(image=img, mask=mask) 
+        
+        xml_path = os.path.join(self.root_dir, 'annotations', 'xmls', f'{img_name}.xml')
+        bbox = self._load_bbox(xml_path)
+        if bbox is None:
+            bbox =self.bbox_from_mask(mask,orig_w,orig_h)
+        label = self.labels[idx] 
+        transformed = self.transform(image=img, mask=mask,bboxes = [bbox],class_labels=[label]) 
         img = transformed['image']
         mask = transformed['mask']
-
+        t_bbox =transformed['bboxes'][0]
+                                      
         if isinstance(mask, np.ndarray):
             mask = torch.from_numpy(mask).long()
         else:
             mask = mask.long()
-            
-        xml_path = os.path.join(self.root_dir, 'annotations', 'xmls', f'{img_name}.xml')
-        bbox = self._load_bbox(xml_path, orig_w=orig_w, orig_h=orig_h, target_size=self.img_size)
-        if bbox is None:
-            bbox =self.bbox_from_mask(mask.numpy(), target_size=self.img_size)
-        label = torch.tensor(self.labels[idx], dtype=torch.long)
+        
+        cx = (t_bbox[0] + t_bbox[2]) / 2.0
+        cy = (t_bbox[1] + t_bbox[3]) / 2.0    
+        w = t_bbox[2] - t_bbox[0]
+        h = t_bbox[3] - t_bbox[1]
+
+        final_bbox = torch.tensor([cx,cy,w,h], dtype= torch.float32)
+        label = torch.tensor(label, dtype=torch.long)
         
         return {
             'image': img,
             'label': label,
-            'bbox': bbox,
+            'bbox': final_bbox,
             'mask': mask,
             'image_name': img_name
         }
