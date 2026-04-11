@@ -185,31 +185,31 @@ def train_localizer(args, train_loader, val_loader, device):
     wandb.init(project=args.wandb_project, entity= args.wandb_entity, name= 'localization', config=vars(args), reinit=True)
 
     model = VGG11Localizer(dropout_p=args.dropout_p).to(device)
-    criterion = nn.MSELoss()
+    criterion = nn.SmoothL1Loss()
     iou_fn = IoULoss(reduction='mean')
     optimizer = optim.Adam(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience = 3)
 
     best_val_loss = float('inf')
-    mse_w = 0.001
+    mse_w = 0.02
     for epoch in range(1 , args.epochs +1):
         model.train() 
-        t_loss, t_mse, t_iou, n = 0.0,0.0,0.0,0.0
+        t_loss, t_l1s, t_iou, n = 0.0,0.0,0.0,0.0
         t_miou, t_acc, t_mae = 0.0,0.0,0.0 
         for batch_idx, batch in enumerate (train_loader,1):
             imgs = batch['image'].to(device)
             boxes    = batch['bbox'].to(device)
             optimizer.zero_grad()
             preds = model(imgs)
-            l_mse = criterion(preds, boxes)
+            l_l1s = criterion(preds, boxes)
             l_iou = iou_fn(preds, boxes)
-            loss = (l_mse * mse_w) + l_iou
+            loss = (l_l1s * mse_w) + l_iou
             loss.backward()
             optimizer.step()
             tm = loc_metrics(preds.detach(), boxes)
             t_loss += loss.item() 
-            t_mse += l_mse.item()  
+            t_l1s += l_l1s.item()  
             t_iou += l_iou.item() 
             t_miou += tm['mean_iou']
             t_acc += tm['accuracy']
@@ -218,15 +218,15 @@ def train_localizer(args, train_loader, val_loader, device):
 
             if batch_idx % 10 == 0:
                 print(f"  [loc] epoch {epoch} batch {batch_idx}/{len(train_loader)} | "
-                      f"loss={loss.item():.4f} mse={l_mse.item():.4f} iou={l_iou.item():.4f} Accuracy = {tm['accuracy']:.1f}%  mae={tm['mae']:.1f}%")
+                      f"loss={loss.item():.4f} L1s={l_l1s.item():.4f} iou={l_iou.item():.4f} Accuracy = {tm['accuracy']:.1f}%  mae={tm['mae']:.1f}%")
                 
 
         
-        t_loss /= n; t_mse /= n; t_iou /= n;
+        t_loss /= n; t_l1s /= n; t_iou /= n;
         t_miou /= n; t_acc /= n; t_mae /= n
 
         model.eval()
-        v_loss, v_mse, v_iou, nv = 0.0,0.0,0.0,0.0
+        v_loss, v_l1s, v_iou, nv = 0.0,0.0,0.0,0.0
         v_miou, v_acc, v_mae = 0.0,0.0,0.0
 
         with torch.no_grad():
@@ -234,35 +234,35 @@ def train_localizer(args, train_loader, val_loader, device):
                 imgs = batch['image'].to(device)
                 boxes    = batch['bbox'].to(device)
                 preds = model(imgs)
-                l_mse = criterion(preds, boxes)
+                l_l1s = criterion(preds, boxes)
                 l_iou = iou_fn(preds, boxes)
-                loss = (l_mse*mse_w) + l_iou
+                loss = (l_l1s*mse_w) + l_iou
                 vm = loc_metrics(preds, boxes)
                 v_loss += loss.item() 
-                v_mse += l_mse.item()  
+                v_l1s += l_l1s.item()  
                 v_iou += l_iou.item() 
                 v_miou += vm['mean_iou']
                 v_acc += vm['accuracy']
                 v_mae += vm['mae'] 
                 nv += 1
         
-        v_loss /= nv; v_mse /= nv; v_iou /= nv;
+        v_loss /= nv; v_l1s /= nv; v_iou /= nv;
         v_miou /= nv; v_acc /= nv; v_mae /= nv       
         scheduler.step(v_loss)
 
         print(f' Epoch {epoch:3d}/{args.epochs} |'
-              f" Train_loss={t_loss:.4f} mse={t_mse:.4f} iou={t_iou:.4f} Train_miou={t_miou:.1f} Train_acc={t_acc:.1f}%  Train_MAE={t_mae:.1f}% |"
-              f" Val_loss={v_loss:.4f} mse={v_mse:.4f} iou={v_iou:.4f} Val_miou={v_miou:.1f} Val_acc={v_acc:.1f}%  Val_MAE={v_mae:.1f}% |")
+              f" Train_loss={t_loss:.4f} mse={t_l1s:.4f} iou={t_iou:.4f} Train_miou={t_miou:.1f} Train_acc={t_acc:.1f}%  Train_MAE={t_mae:.1f}% |"
+              f" Val_loss={v_loss:.4f} mse={v_l1s:.4f} iou={v_iou:.4f} Val_miou={v_miou:.1f} Val_acc={v_acc:.1f}%  Val_MAE={v_mae:.1f}% |")
         
         wandb.log({
             'loc/train_loss': t_loss,
-            'loc/train_mse': t_mse,
+            'loc/train_mse': t_l1s,
             'loc/train_iou': t_iou,
             'loc/train_miou': t_miou,
             'loc/train_acc': t_acc,
             'loc/train_mae': t_mae,
             'loc/val_loss': v_loss,
-            'loc/val_mse': v_mse,
+            'loc/val_mse': v_l1s,
             'loc/val_iou': v_iou,
             'loc/val_miou': v_miou,
             'loc/val_acc': v_acc,
