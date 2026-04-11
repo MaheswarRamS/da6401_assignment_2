@@ -185,6 +185,23 @@ def train_localizer(args, train_loader, val_loader, device):
     wandb.init(project=args.wandb_project, entity= args.wandb_entity, name= 'localization', config=vars(args), reinit=True)
 
     model = VGG11Localizer(dropout_p=args.dropout_p).to(device)
+    try: 
+        print('Loading the classifier weights to the backbone')
+        cls_state = torch.load(args.cls_ckpt, map_location = device)
+        loc_state  = model.state_dict()
+
+        for cls_key, weight in cls_state.items():
+            # Mapping the classifier's backbone names to the localizer's backbone names
+            loc_key = cls_key.replace('vgg11.features', 'backbone').replace('vgg11', 'backbone')
+            
+            if loc_key in loc_state and loc_state[loc_key].shape == weight.shape:
+                loc_state[loc_key] = weight
+
+        model.load_state_dict(loc_state)
+        print(' Localizer backbone is now initialized with classifier weights.')
+    except Exception as e:
+        print(f"Could not load backbone: {e}")
+
     criterion = nn.SmoothL1Loss()
     iou_fn = IoULoss(reduction='mean')
     optimizer = optim.Adam(model.parameters(), lr = args.lr, weight_decay = args.weight_decay)
@@ -192,7 +209,7 @@ def train_localizer(args, train_loader, val_loader, device):
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience = 3)
 
     best_val_loss = float('inf')
-    mse_w = 0.02
+    mse_w = 1.0
     for epoch in range(1 , args.epochs +1):
         model.train() 
         t_loss, t_l1s, t_iou, n = 0.0,0.0,0.0,0.0
