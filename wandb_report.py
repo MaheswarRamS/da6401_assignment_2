@@ -71,18 +71,24 @@ def run_epoch_seg(model, loader, ce_fn, dice_fn, optimizer, device, train):
 # ---------------------------------------------------------------------------
 
 def section_2_1(args):
+    print("\n--- Starting Section 2.1: BatchNorm effect on activations ---")
     device = get_device()
+    print("Loading datasets...")
     train_loader, val_loader, _ = make_loaders(args.data_dir, args.batch_size)
+    
+    print("Initializing W&B...")
     wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                name='2.1_batchnorm_effect', reinit=True)
 
     for use_bn in [True, False]:
         tag = 'with_BN' if use_bn else 'no_BN'
+        print(f"\nTraining model variant: {tag}")
         model = VGG11Classifier(num_classes=37, dropout_p=0.5, use_bn=use_bn).to(device)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
         for epoch in range(1, args.epochs + 1):
+            print(f"  [{tag}] Running Epoch {epoch}/{args.epochs}...")
             t_loss, t_acc, _ = run_epoch_cls(model, train_loader, criterion, optimizer, device, True)
             v_loss, v_acc, _ = run_epoch_cls(model, val_loader,   criterion, None,      device, False)
             print(f'  2.1 [{tag}] epoch {epoch} | train={t_loss:.4f} val={v_loss:.4f} acc={v_acc:.1f}%')
@@ -90,16 +96,19 @@ def section_2_1(args):
                        f'2.1/{tag}/val_acc': v_acc, 'epoch': epoch})
 
         # Activation distribution at conv3_1
+        print(f"  [{tag}] Extracting activation distributions for conv3_1...")
         model.eval(); acts = []
         hook = model.vgg11.conv3_1.register_forward_hook(lambda m,i,o: acts.append(o.detach().cpu()))
         with torch.no_grad(): model(next(iter(val_loader))['image'].to(device))
         hook.remove()
 
+        print(f"  [{tag}] Plotting and logging to W&B...")
         fig, ax = plt.subplots(figsize=(6,4))
         ax.hist(acts[0].numpy().flatten(), bins=100, alpha=0.7)
         ax.set_title(f'conv3_1 activations — {tag}'); plt.tight_layout()
         wandb.log({f'2.1/activation_dist_{tag}': wandb.Image(fig)}); plt.close(fig)
 
+    print("Section 2.1 Complete. Finishing W&B run.")
     wandb.finish()
 
 
@@ -108,24 +117,31 @@ def section_2_1(args):
 # ---------------------------------------------------------------------------
 
 def section_2_2(args):
+    print("\n--- Starting Section 2.2: Dropout comparison ---")
     device = get_device()
+    print("Loading datasets...")
     train_loader, val_loader, _ = make_loaders(args.data_dir, args.batch_size)
+    
+    print("Initializing W&B...")
     wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                name='2.2_dropout_comparison', reinit=True)
 
     for p in [0.0, 0.2, 0.5]:
         tag = f'dropout_{p}'
+        print(f"\nTraining model variant: {tag}")
         model = VGG11Classifier(num_classes=37, dropout_p=p).to(device)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
         for epoch in range(1, args.epochs + 1):
+            print(f"  [{tag}] Running Epoch {epoch}/{args.epochs}...")
             t_loss, t_acc, _ = run_epoch_cls(model, train_loader, criterion, optimizer, device, True)
             v_loss, v_acc, _ = run_epoch_cls(model, val_loader,   criterion, None,      device, False)
             print(f'  2.2 [{tag}] epoch {epoch} | train={t_loss:.4f} val={v_loss:.4f} acc={v_acc:.1f}%')
             wandb.log({f'2.2/{tag}/train_loss': t_loss, f'2.2/{tag}/val_loss': v_loss,
                        f'2.2/{tag}/val_acc': v_acc, 'epoch': epoch})
 
+    print("Section 2.2 Complete. Finishing W&B run.")
     wandb.finish()
 
 
@@ -134,28 +150,54 @@ def section_2_2(args):
 # ---------------------------------------------------------------------------
 
 def section_2_3(args):
+    print("\n--- Starting Section 2.3: Transfer learning strategies ---")
     device = get_device()
+    print("Loading datasets...")
     train_loader, val_loader, _ = make_loaders(args.data_dir, args.batch_size)
+    
+    print("Initializing W&B...")
     wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                name='2.3_transfer_learning', reinit=True)
 
     ce_fn, dice_fn = nn.CrossEntropyLoss(), DiceLoss()
 
     for strategy in ['frozen', 'partial', 'full']:
-        print(f'\n--- 2.3: {strategy} ---')
+        print(f'\n--- 2.3: Evaluating Strategy: {strategy} ---')
         model = VGG11UNet(num_classes=3, dropout_p=0.5).to(device)
 
+        try:
+            print("  Loading expert features from Classification task...")
+            
+            cls_state = torch.load('checkpoints/classifier.pth', map_location=device)
+            unet_state = model.state_dict()
+
+            # Transfering the weights from Classifier to UNet Encoder
+            for cls_key, weight in cls_state.items():
+                # Mapping the classifier's backbone names to the UNet's encoder names
+                unet_key = cls_key.replace('vgg11.features', 'encoder').replace('vgg11', 'encoder')
+                
+                if unet_key in unet_state and unet_state[unet_key].shape == weight.shape:
+                    unet_state[unet_key] = weight
+
+            model.load_state_dict(unet_state)
+            print("  Success! UNet encoder initialized with expert weights.")
+        except Exception as e:
+            print(f"  Could not load classifier weights: {e}")
+   
         if strategy == 'frozen':
+            print("  Freezing entire encoder...")
             for p in model.encoder.parameters(): p.requires_grad = False
         elif strategy == 'partial':
+            print("  Freezing partial encoder blocks...")
             freeze = ['conv1_1', 'conv2_1', 'conv3_1', 'conv3_2']
             for name, param in model.encoder.named_parameters():
                 if any(name.startswith(b) for b in freeze): param.requires_grad = False
-
+       
         optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
                                lr=args.lr, weight_decay=1e-4)
 
         for epoch in range(1, args.epochs + 1):
+            print(f"  [{strategy}] Running Epoch {epoch}/{args.epochs}...")
             t_loss, t_px, t_miou = run_epoch_seg(model, train_loader, ce_fn, dice_fn, optimizer, device, True)
             v_loss, v_px, v_miou = run_epoch_seg(model, val_loader,   ce_fn, dice_fn, None,      device, False)
             print(f'  epoch {epoch} | train={t_loss:.4f} miou={t_miou:.1f}% | val={v_loss:.4f} miou={v_miou:.1f}%')
@@ -163,23 +205,29 @@ def section_2_3(args):
                        f'2.3/{strategy}/train_miou': t_miou, f'2.3/{strategy}/val_miou': v_miou,
                        f'2.3/{strategy}/val_px_acc': v_px,   'epoch': epoch})
 
+    print("Section 2.3 Complete. Finishing W&B run.")
     wandb.finish()
-
 
 # ---------------------------------------------------------------------------
 # 2.4 Feature maps
 # ---------------------------------------------------------------------------
 
 def section_2_4(args):
+    print("\n--- Starting Section 2.4: Feature maps ---")
     device = get_device()
+    print(f"Loading Classifier model from {args.cls_ckpt}...")
     model = VGG11Classifier(num_classes=37).to(device)
     model.load_state_dict(torch.load(args.cls_ckpt, map_location=device)); model.eval()
+    
+    print("Initializing W&B...")
     wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                name='2.4_feature_maps', reinit=True)
 
+    print("Extracting test sample...")
     sample = OxfordIIITPetDataset(args.data_dir, split='test')[0]
     img_t  = sample['image'].unsqueeze(0).to(device)
 
+    print("Registering hooks and running forward pass...")
     captured = {}
     def hook(name): return lambda m,i,o: captured.__setitem__(name, o.detach().cpu())
     h1 = model.vgg11.conv1_1.register_forward_hook(hook('conv1_1'))
@@ -195,6 +243,7 @@ def section_2_4(args):
             ax.axis('off')
         fig.suptitle(title); plt.tight_layout(); return fig
 
+    print("Generating feature map plots and logging to W&B...")
     wandb.log({
         '2.4/input':         wandb.Image((denorm(sample['image']).permute(1,2,0).numpy()*255).astype(np.uint8)),
         '2.4/conv1_1_fmaps': wandb.Image(plot_fmaps(captured['conv1_1'], 'conv1_1 — edges (224×224)')),
@@ -209,17 +258,25 @@ def section_2_4(args):
 # ---------------------------------------------------------------------------
 
 def section_2_5(args):
+    print("\n--- Starting Section 2.5: Bounding box predictions table ---")
     device = get_device()
+    print(f"Loading Localizer model from {args.loc_ckpt}...")
     model = VGG11Localizer().to(device)
     model.load_state_dict(torch.load(args.loc_ckpt, map_location=device)); model.eval()
+    
+    print("Initializing W&B...")
     wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                name='2.5_bbox_table', reinit=True)
 
+    print("Loading test dataset...")
     ds    = OxfordIIITPetDataset(args.data_dir, split='test')
     table = wandb.Table(columns=['image', 'image_name', 'iou', 'confidence', 'failure'])
 
+    total_imgs = min(20, len(ds))
+    print(f"Evaluating and generating overlays for {total_imgs} images...")
     with torch.no_grad():
-        for idx in range(min(20, len(ds))):
+        for idx in range(total_imgs):
+            print(f"  Processing bbox image {idx + 1}/{total_imgs}...")
             s        = ds[idx]
             gt       = s['bbox'].numpy()
             pred     = model(s['image'].unsqueeze(0).to(device))[0].cpu().numpy()
@@ -240,6 +297,7 @@ def section_2_5(args):
             table.add_data(wandb.Image(fig), s['image_name'], round(iou,3), round(conf,3), failure)
             plt.close(fig)
 
+    print("Logging table to W&B...")
     wandb.log({'2.5/bbox_table': table}); print('2.5: Table logged.'); wandb.finish()
 
 
@@ -248,17 +306,25 @@ def section_2_5(args):
 # ---------------------------------------------------------------------------
 
 def section_2_6(args):
+    print("\n--- Starting Section 2.6: Segmentation evaluation ---")
     device = get_device()
+    print(f"Loading Segmentation model from {args.seg_ckpt}...")
     model = VGG11UNet(num_classes=3).to(device)
     model.load_state_dict(torch.load(args.seg_ckpt, map_location=device)); model.eval()
+    
+    print("Initializing W&B...")
     wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                name='2.6_seg_eval', reinit=True)
 
+    print("Loading test dataset...")
     ds    = OxfordIIITPetDataset(args.data_dir, split='test')
     table = wandb.Table(columns=['original','gt_mask','pred_mask','px_acc','dice'])
 
+    total_imgs = min(5, len(ds))
+    print(f"Evaluating and generating overlays for {total_imgs} images...")
     with torch.no_grad():
-        for idx in range(min(5, len(ds))):
+        for idx in range(total_imgs):
+            print(f"  Processing segmentation image {idx + 1}/{total_imgs}...")
             s         = ds[idx]
             gt_mask   = s['mask'].numpy()
             logits    = model(s['image'].unsqueeze(0).to(device))
@@ -272,6 +338,7 @@ def section_2_6(args):
                            wandb.Image(CMAP[pred_mask.astype(int)]),
                            round(m['px_acc'],2), round(dice,2))
 
+    print("Logging table to W&B...")
     wandb.log({'2.6/seg_table': table}); print('2.6: Table logged.'); wandb.finish()
 
 
@@ -280,9 +347,10 @@ def section_2_6(args):
 # ---------------------------------------------------------------------------
 
 def section_2_7(args):
-
-
+    print("\n--- Starting Section 2.7: Novel image pipeline ---")
     device = get_device()
+    
+    print("Loading Classifier, Localizer, and Segmentation checkpoints...")
     cls_model = VGG11Classifier(num_classes=37).to(device)
     cls_model.load_state_dict(torch.load(args.cls_ckpt, map_location=device)); cls_model.eval()
     loc_model = VGG11Localizer().to(device)
@@ -290,6 +358,7 @@ def section_2_7(args):
     seg_model = VGG11UNet(num_classes=3).to(device)
     seg_model.load_state_dict(torch.load(args.seg_ckpt, map_location=device)); seg_model.eval()
 
+    print("Initializing W&B...")
     wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                name='2.7_novel_pipeline', reinit=True)
 
@@ -298,13 +367,16 @@ def section_2_7(args):
                             ToTensorV2()])
 
     if not os.path.exists(args.novel_dir):
-        print(f"novel_dir '{args.novel_dir}' not found."); wandb.finish(); return
+        print(f"ERROR: novel_dir '{args.novel_dir}' not found."); wandb.finish(); return
 
     files = [f for f in os.listdir(args.novel_dir)
              if f.lower().endswith(('.jpg','.jpeg','.png'))][:3]
+    
+    print(f"Found {len(files)} files in novel directory. Starting inference pipeline...")
     table = wandb.Table(columns=['original','bbox_overlay','seg_mask','breed','confidence'])
 
     for fname in files:
+        print(f"  Processing novel image: {fname}...")
         pil  = Image.open(os.path.join(args.novel_dir, fname)).convert('RGB')
         t    = transform(image=np.array(pil))['image'].unsqueeze(0).to(device)
         orig = np.array(pil.resize((224,224)))
@@ -327,6 +399,7 @@ def section_2_7(args):
                        CLASS_NAMES[pred_cls], round(conf,2))
         plt.close(fig)
 
+    print("Logging table to W&B...")
     wandb.log({'2.7/novel_pipeline': table}); print('2.7: Logged.'); wandb.finish()
 
 
@@ -335,20 +408,26 @@ def section_2_7(args):
 # ---------------------------------------------------------------------------
 
 def section_2_8(args):
+    print("\n--- Starting Section 2.8: Meta-analysis ---")
     device = get_device()
+    print("Loading test loader...")
     _, _, test_loader = make_loaders(args.data_dir, args.batch_size)
+    
+    print("Initializing W&B...")
     wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                name='2.8_meta_analysis', reinit=True)
 
     ce_fn, dice_fn = nn.CrossEntropyLoss(), DiceLoss()
 
     # Classification
+    print("Evaluating final Classification performance on test set...")
     cls_model = VGG11Classifier(num_classes=37).to(device)
     cls_model.load_state_dict(torch.load(args.cls_ckpt, map_location=device))
     _, cls_acc, cls_f1 = run_epoch_cls(cls_model, test_loader, ce_fn, None, device, False)
     print(f'  cls acc={cls_acc:.2f}% f1={cls_f1:.2f}%')
 
     # Localization
+    print("Evaluating final Localization performance on test set...")
     loc_model = VGG11Localizer().to(device)
     loc_model.load_state_dict(torch.load(args.loc_ckpt, map_location=device)); loc_model.eval()
     iou_fn = IoULoss(reduction='none'); ious = []
@@ -360,6 +439,7 @@ def section_2_8(args):
     print(f'  loc mean_iou={loc_miou:.2f}%')
 
     # Segmentation
+    print("Evaluating final Segmentation performance on test set...")
     seg_model = VGG11UNet(num_classes=3).to(device)
     seg_model.load_state_dict(torch.load(args.seg_ckpt, map_location=device))
     _, seg_px, seg_miou = run_epoch_seg(seg_model, test_loader, ce_fn, dice_fn, None, device, False)
@@ -367,6 +447,7 @@ def section_2_8(args):
     print(f'  seg px_acc={seg_px:.2f}% miou={seg_miou:.2f}%')
 
     # Summary chart
+    print("Generating summary charts...")
     metrics = {'Cls Acc': cls_acc, 'Cls F1': cls_f1, 'Loc mIoU': loc_miou,
                'Seg Px Acc': seg_px, 'Seg mIoU': seg_miou, 'Seg Dice': seg_dice}
     fig, ax = plt.subplots(figsize=(9,5))
@@ -378,6 +459,7 @@ def section_2_8(args):
                 f'{val:.1f}%', ha='center', va='bottom', fontsize=9)
     plt.xticks(rotation=15, ha='right'); plt.tight_layout()
 
+    print("Logging final metrics to W&B...")
     wandb.log({**{f'2.8/test_{k.lower().replace(" ","_")}': v for k,v in metrics.items()},
                '2.8/final_metrics': wandb.Image(fig)})
     plt.close(fig); print('2.8: Meta-analysis complete.'); wandb.finish()
@@ -389,18 +471,18 @@ def section_2_8(args):
 
 def parse_args():
     p = argparse.ArgumentParser(description='DA6401 A2 — Analysis (2.1–2.8)')
-    p.add_argument('--section',       type=str, required=True,
+    p.add_argument('-s','--section',       type=str, required=True,
                    choices=['2.1','2.2','2.3','2.4','2.5','2.6','2.7','2.8'])
-    p.add_argument('--data_dir',      type=str, default='./data/pets')
-    p.add_argument('--novel_dir',     type=str, default='./novel_images')
-    p.add_argument('--cls_ckpt',      type=str, default='checkpoints/classifier.pth')
-    p.add_argument('--loc_ckpt',      type=str, default='checkpoints/localizer.pth')
-    p.add_argument('--seg_ckpt',      type=str, default='checkpoints/segmentation.pth')
-    p.add_argument('--epochs',        type=int, default=10)
-    p.add_argument('--batch_size',    type=int, default=16)
-    p.add_argument('--lr',            type=float, default=1e-3)
-    p.add_argument('--wandb_project', type=str, default='DA6401_Assignment_2')
-    p.add_argument('--wandb_entity',  type=str, default=None)
+    p.add_argument('-dd','--data_dir',      type=str, default='./data/pets')
+    p.add_argument('-nd','--novel_dir',     type=str, default='./data/novel_images')
+    p.add_argument('-cck','--cls_ckpt',      type=str, default='checkpoints/classifier.pth')
+    p.add_argument('-lck','--loc_ckpt',      type=str, default='checkpoints/localizer.pth')
+    p.add_argument('-sck','--seg_ckpt',      type=str, default='checkpoints/segmentation.pth')
+    p.add_argument('-ep','--epochs',        type=int, default=5)
+    p.add_argument('-bs','--batch_size',    type=int, default=16)
+    p.add_argument('-lr','--lr',            type=float, default=1e-3)
+    p.add_argument('-wp','--wandb_project', type=str, default='DA6401_Assignment_2')
+    p.add_argument('-we','--wandb_entity',  type=str, default=None)
     return p.parse_args()
 
 
