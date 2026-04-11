@@ -153,5 +153,7 @@ Output : [B, 512, 7, 7] for 224×224 input
 
 ## Links
 
-- **W&B Report:** `<paste your public W&B report link here>`
-- **GitHub Repo:** `<paste your GitHub repo link here>`
+Wandb Link: 
+https://wandb.ai/bt25d030-indian-institute-of-technology-madras/DA6401_Assign2_Analysis/reports/DA6401-Assignment-2--VmlldzoxNjQ5MDc1NA?accessToken=qaojmegw1cgmqadmxe4gefgm13c1wiqg6s67v9sleb5xk81zcctio6aoinkeoml9
+GitHub Repo:
+https://github.com/MaheswarRamS/da6401_assignment_2.git
